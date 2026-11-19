@@ -35,5 +35,121 @@ from ..common import ERROR, parse_yolo_line  # noqa: F401
 
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    drop_codes = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+    remove_codes = {"DUP_IMAGE_EXACT", "DUP_IMAGE_NEAR", "LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+    removed = set()
+    drop_lines = defaultdict(set)
+    clip_lines = defaultdict(set)
+    needs_labels = set()
+    rename_classes = False
+
+    for issue in issues:
+        if issue.severity != ERROR:
+            continue
+        if issue.code in remove_codes:
+            removed.add(issue.image)
+        elif issue.code in drop_codes and issue.line is not None:
+            drop_lines[issue.image].add(issue.line)
+        elif issue.code == "BOX_OUT_OF_IMAGE" and issue.line is not None:
+            clip_lines[issue.image].add(issue.line)
+        elif issue.code == "MISSING_LABEL_FILE":
+            needs_labels.add(issue.image)
+        elif issue.code == "BAD_CLASS_NAME":
+            rename_classes = True
+
+    changes = []
+
+    # Image removal takes precedence over line edits for the same image.
+    for stem in sorted(removed):
+        image_paths = [p for p in ds.image_files() if p.stem == stem]
+        label_path = ds.label_path(stem)
+        if not image_paths and not label_path.exists():
+            continue
+        for path in image_paths:
+            path.unlink(missing_ok=True)
+        label_path.unlink(missing_ok=True)
+        changes.append({"image": stem, "line": "", "action": "remove_image",
+                        "before": "ảnh và nhãn hiện có", "after": "đã xóa khỏi dataset làm việc"})
+
+    for stem in sorted(set(drop_lines) | set(clip_lines)):
+        if stem in removed:
+            continue
+        path = ds.label_path(stem)
+        if not path.is_file():
+            continue
+        original_text = path.read_text(encoding="utf-8", errors="replace")
+        lines = original_text.splitlines()
+        updated = list(lines)
+        changed = False
+
+        for line_number in sorted(drop_lines[stem] | clip_lines[stem]):
+            index = line_number - 1
+            if index < 0 or index >= len(lines) or not lines[index].strip():
+                continue
+            before = lines[index]
+
+            # A mandatory drop always wins when the same source line has several errors.
+            if line_number in drop_lines[stem]:
+                updated[index] = None
+                changes.append({"image": stem, "line": line_number, "action": "drop_line",
+                                "before": before, "after": ""})
+                changed = True
+                continue
+
+            try:
+                class_id, cx, cy, width, height = parse_yolo_line(before)
+            except ValueError:
+                continue
+            left, top = cx - width / 2, cy - height / 2
+            right, bottom = cx + width / 2, cy + height / 2
+            clipped_left, clipped_top = max(0.0, left), max(0.0, top)
+            clipped_right, clipped_bottom = min(1.0, right), min(1.0, bottom)
+            clipped_width = clipped_right - clipped_left
+            clipped_height = clipped_bottom - clipped_top
+
+            # A box wholly beyond an image edge has no area after clipping.
+            if clipped_width <= 0 or clipped_height <= 0:
+                updated[index] = None
+                changes.append({"image": stem, "line": line_number, "action": "drop_line",
+                                "before": before, "after": ""})
+            else:
+                clipped_cx = (clipped_left + clipped_right) / 2
+                clipped_cy = (clipped_top + clipped_bottom) / 2
+                after = " ".join(format(value, ".10g") for value in
+                                 (class_id, clipped_cx, clipped_cy, clipped_width, clipped_height))
+                if after == before:
+                    continue
+                updated[index] = after
+                changes.append({"image": stem, "line": line_number, "action": "clip_box",
+                                "before": before, "after": after})
+            changed = True
+
+        if changed:
+            trailing_newline = original_text.endswith(("\n", "\r"))
+            kept_lines = [line for line in updated if line is not None]
+            path.write_text("\n".join(kept_lines) + ("\n" if trailing_newline else ""), encoding="utf-8")
+
+    for stem in sorted(needs_labels - removed):
+        if ds.image_path(stem) is not None and not ds.label_path(stem).exists():
+            changes.append({"image": stem, "line": "", "action": "needs_label",
+                            "before": "(không có file)", "after": "chuyển người gán"})
+
+    if rename_classes:
+        yaml_path = ds.yaml_path
+        if yaml_path.exists():
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            if data is None:
+                data = {}
+            if not isinstance(data, dict):
+                raise ValueError(f"nội dung YAML không phải mapping: {yaml_path}")
+        else:
+            data = {}
+        correct_names = {index: name for index, name in enumerate(cfg["classes"])}
+        if data.get("names") != correct_names:
+            before = data.get("names", "(không có names)")
+            data["names"] = correct_names
+            yaml_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            changes.append({"image": "data.yaml", "line": "", "action": "rename_classes",
+                            "before": str(before), "after": str(correct_names)})
+
+    return changes
