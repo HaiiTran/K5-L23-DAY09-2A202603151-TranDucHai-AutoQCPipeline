@@ -54,9 +54,25 @@ vì sao `05_review_queue.csv` xếp ảnh đầu hàng như vậy? Với ngân s
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
 Chưa train: ghi "chưa chạy" và lý do, rồi bỏ qua phần còn lại của mục này. Nếu đã train: dán bảng từ `submission/results/comparison.md` (model, epoch, seed, số ảnh train mỗi biến thể).
 
-TODO(học viên): chênh mAP50 (clean − raw) so với **độ lệch chuẩn giữa các seed**; kết luận **trung thực** (nằm trong nhiễu thì nói là chưa kết luận được); ≥ 2 giả thuyết giải thích (ảnh trùng/rò rỉ test trong `raw`, nhãn máy còn lại trong `clean`, test chỉ 100 ảnh…) và cách kiểm.
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---|---|---|---|---|---|
+| raw | 224 | 2 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 193 | 2 | 0.729 ± 0.002 | 0.500 ± 0.000 | 0.794 ± 0.028 | 0.619 ± 0.005 |
+
+Chênh mAP50 (clean − raw) = **+0.004**.
+
+chênh mAP50 (clean − raw) so với **độ lệch chuẩn giữa các seed**; kết luận **trung thực** (nằm trong nhiễu thì nói là chưa kết luận được); ≥ 2 giả thuyết giải thích (ảnh trùng/rò rỉ test trong `raw`, nhãn máy còn lại trong `clean`, test chỉ 100 ảnh…) và cách kiểm.
+- độ lệch mAP50 bằng 2x-độ lệch clean(0.002) và lớn hơn độ lệch raw. Với độ lệch được ước tính từ lần chạy ở mức rất tối thiểu và tập test chỉ hơn 100 ảnh, không thể kết luận được là clean sẽ sạch hơn raw. 
+- Giả thuyết và cách kiểm tra:
+    - Raw có ảnh trùng hoặc rò rỉ sang test: `01_intake.csv` ghi nhận 11 ảnh LEAK_TEST và 15 ảnh trùng chính xác/gần đúng trên 224 ảnh. Kiểm tra các cặp bằng hash và chạy lại phép so sánh sau khi loại ảnh trùng/rò rỉ.
+    - Tập test nhỏ làm kết quả dao động: đánh giá hiện dựa trên 100 ảnh test. Lặp lại với thêm seed và, nếu có thể, một tập đánh giá lớn hơn để xem chênh lệch có ổn định không.
 
 ## 6. Quyết định và ghi chú AI
-TODO(học viên): (a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release? (b) Dùng AI viết code? Ghi 3 dòng: prompt chính, cách bạn kiểm code AI, 1 lần AI sai. Không dùng: ghi "không dùng".
+(a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release? 
+- quyết định cuối là Hold. Cần xử lý và xác minh ít nhất 15 ảnh trong 34 ảnh bị gắn cờ, đồng thời rà soát để không còn lỗi bắt buộc.
+(b) Dùng AI viết code? Ghi 3 dòng: prompt chính, cách bạn kiểm code AI, 1 lần AI sai. Không dùng: ghi "không dùng".
+- prompt chính: nhờ AI hoàn thiện code label_format, gate, autofix, second_opinion theo docstring và bao quát ca biên. Không hoàn thiện code chỉ để pass file test. 
+- đối chiếu docstring và unit tests
+- AI thiếu: kiểm tra ngưỡng Hold bị thiếu, không phải số, không hữu hạn hoặc ngoài 0–1 thì báo lỗi cấu hình rõ ràng. Chuẩn hóa image_stems thành tập hợp để mẫu số không đếm trùng ảnh.
 
 *(Thưởng +2, tùy chọn)* CVAT: lọc `width < 20`, ảnh/số box khớp, đối chiếu `BOX_TINY` (xem docs/CVAT_FILTER.md), 1 câu về `can_review`.
